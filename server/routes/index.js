@@ -125,7 +125,7 @@ router.post('/check', (req, res) => {
     console.error('检查文件失败:', error);
     res.status(500).json({
       code: 1,
-      message: '检查文件失败1',
+      message: '检查文件失败',
       error: error.message
     });
   }

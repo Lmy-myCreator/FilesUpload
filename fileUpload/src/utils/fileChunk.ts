@@ -17,7 +17,7 @@ export const createFileChunks = (file: File, chunkSize: number = 5 * 1024 * 1024
 };
 
 export const calculateHash = (file: File): string => {
-  // 这里使用文件名和最后修改时间的组合作为简单的hash
-  // 实际项目中可以使用更复杂的hash算法
-  return `${file.name}-${file.lastModified}`;
+  // 移除特殊字符，只保留安全的字符
+  const safeName = file.name.replace(/[^a-zA-Z0-9]/g, '_');
+  return `${safeName}_${file.lastModified}`;
 };

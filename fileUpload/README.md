@@ -76,6 +76,28 @@ try {
 - 使用 try-catch 捕获上传过程中的错误
 - 错误发生时更新状态显示错误提示
 - 支持重新选择文件重试
+f 拖拽上传功能：
+// 在 components/FileUploader.tsx 中实现拖拽上传
+const [isDragging, setIsDragging] = useState(false);
+
+// 处理拖拽事件
+const handleDragEnter = (e: ReactDragEvent<HTMLDivElement>) => {
+  e.preventDefault();
+  setIsDragging(true);
+};
+
+const handleDrop = async (e: ReactDragEvent<HTMLDivElement>) => {
+  e.preventDefault();
+  const droppedFiles = Array.from(e.dataTransfer.files);
+  // 处理上传逻辑
+};
+
+- 使用 React 的 DragEvent 处理拖拽事件
+- 实现拖拽区域的视觉反馈
+- 支持多文件拖拽上传
+- 复用已有的文件处理逻辑
+- 提供友好的拖拽提示界面
+- 上传完成后自动隐藏进度条
 
 关键技术点：
 
@@ -115,3 +137,5 @@ src/
 4. 秒传功能提高效率
 5. 错误处理完善
 6. 代码结构清晰，易于维护
+7. 支持多种上传方式，提高用户便利性
+8. 拖拽上传提供良好的交互体验

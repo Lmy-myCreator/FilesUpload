@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, type DragEvent, useEffect } from 'react';
 import { createFileChunks, calculateHash } from '../utils/fileChunk';
 import { uploadChunk, checkFileStatus, mergeChunks } from '../services/uploadService';
 import './FileUploader.css';
@@ -23,6 +23,9 @@ const FileUploader: React.FC = () => {
     currentFile: 0,
     totalFiles: 0
   });
+  
+  // 添加拖拽状态
+  const [isDragging, setIsDragging] = useState(false);
 
   // 文件选择处理函数
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -119,7 +122,7 @@ const FileUploader: React.FC = () => {
         ...prev,
         percentage: 100,
         status: 'success',
-        currentFile: files.length,
+        currentFile: files.length,  // 使用 files 而不是 allFiles
         currentChunk: 0,
         totalChunks: 0
       }));
@@ -133,24 +136,220 @@ const FileUploader: React.FC = () => {
     }
   };
 
-  // 渲染上传组件UI
-  return (
-    <div className="file-uploader">
-      {/* 文件选择输入框 */}
-      <input
-        type="file"
-        onChange={handleFileChange}
-        style={{ display: 'none' }}
-        id="file-input"
-        multiple
-      />
-      {/* 自定义上传按钮 */}
-      <label htmlFor="file-input" className="upload-button">
-        选择文件
-      </label>
+  // 处理拖拽进入事件
+  const handleDragEnter = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  // 处理拖拽离开事件
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  // 处理拖拽悬停事件
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  // 处理文件拖放事件
+  const handleDrop = async (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const items = e.dataTransfer.items;
+    if (!items) return;
+
+    try {
+      // 初始化上传状态
+      setProgress({
+        percentage: 0,
+        status: 'uploading',
+        currentChunk: 0,
+        totalChunks: 0,
+        currentFile: 0,
+        totalFiles: 0
+      });
+
+      const processEntry = async (entry: FileSystemEntry) => {
+        if (entry.isFile) {
+          const file = await new Promise<File>((resolve) => {
+            (entry as FileSystemFileEntry).file(resolve);
+          });
+          return [file];
+        } else if (entry.isDirectory) {
+          const dirReader = (entry as FileSystemDirectoryEntry).createReader();
+          const entries = await new Promise<FileSystemEntry[]>((resolve) => {
+            dirReader.readEntries(resolve);
+          });
+          const files:any = await Promise.all(entries.map(processEntry));
+          return files.flat();
+        }
+        return [];
+      };
+
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const entry = items[i].webkitGetAsEntry();
+        if (entry) {
+          const entryFiles = await processEntry(entry);
+          files.push(...entryFiles);
+        }
+      }
+
+      setProgress(prev => ({
+        ...prev,
+        totalFiles: files.length
+      }));
+
+      // 处理所有文件上传
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const hash = calculateHash(file);
+        const chunks = createFileChunks(file);
+        
+        // 更新当前处理的文件信息
+        setProgress(prev => ({
+          ...prev,
+          currentFile: i + 1,
+          totalChunks: chunks.length,
+          currentChunk: 0
+        }));
+
+        // 检查文件是否已存在（秒传功能）
+        const checkResult = await checkFileStatus(hash, file.name);
+        if (checkResult.data.exists) {
+          // 文件已存在，显示秒传成功
+          setProgress(prev => ({
+            ...prev,
+            percentage: 100,
+            status: 'rapid-success',
+            currentChunk: chunks.length,
+            totalChunks: chunks.length
+          }));
+          // 延迟1秒显示秒传成功状态
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue;
+        }
+
+        // 获取已上传的分片信息（断点续传）
+        const uploadedChunks = new Set(checkResult.data.uploadedChunks || []);
+        let completedChunks = 0;
+
+        // 并发上传所有分片
+        await Promise.all(
+          chunks.map(async (chunk, index) => {
+            // 如果分片已上传，跳过
+            if (uploadedChunks.has(index.toString())) {
+              completedChunks++;
+              setProgress(prev => ({
+                ...prev,
+                percentage: Math.round((completedChunks * 100) / chunks.length),
+                currentChunk: completedChunks
+              }));
+              return;
+            }
+
+            // 上传分片并更新进度
+            await uploadChunk(chunk.file, chunk.index, hash, (chunkProgress) => {
+              const totalProgress = Math.round(
+                ((completedChunks * 100 + chunkProgress) * 100) / (chunks.length * 100)
+              );
+              setProgress(prev => ({
+                ...prev,
+                percentage: totalProgress,
+                currentChunk: completedChunks
+              }));
+            });
+
+            // 更新已完成的分片数
+            completedChunks++;
+            setProgress(prev => ({
+              ...prev,
+              percentage: Math.round((completedChunks * 100) / chunks.length),
+              currentChunk: completedChunks
+            }));
+          })
+        );
+
+        // 所有分片上传完成，请求合并
+        await mergeChunks(hash, file.name, file.size, chunks.length);
+      }
       
-      {/* 上传进度显示 */}
-      {progress.status !== 'waiting' && (
+      // 所有文件上传完成
+      setProgress(prev => ({
+        ...prev,
+        percentage: 100,
+        status: 'success',
+        currentFile: files.length,  // 使用 files 而不是 allFiles
+        currentChunk: 0,
+        totalChunks: 0
+      }));
+    } catch (error) {
+      // 错误处理
+      console.error('上传失败:', error);
+      setProgress(prev => ({
+        ...prev,
+        status: 'error'
+      }));
+    }
+  };
+
+  // 添加一个状态来控制进度条的显示
+  const [showProgress, setShowProgress] = useState(false);
+
+  // 添加 useEffect 来监听上传状态的变化
+  useEffect(() => {
+    if (progress.status === 'success' || progress.status === 'rapid-success') {
+      setShowProgress(true);
+      const timer = setTimeout(() => {
+        setShowProgress(false);
+      }, 1000);
+      
+      // 清理定时器
+      return () => clearTimeout(timer);
+    } else if (progress.status === 'uploading') {
+      setShowProgress(true);
+    }
+  }, [progress.status]);
+
+  return (
+    <div 
+      className={`file-uploader ${isDragging ? 'dragging' : ''}`}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      <div className="upload-area">
+        <input
+          type="file"
+          onChange={handleFileChange}
+          style={{ display: 'none' }}
+          id="file-input"
+          multiple
+          webkitdirectory=""
+          directory=""
+        />
+        <div className="upload-buttons">
+          <label htmlFor="file-input" className="upload-button">
+            <i className="icon-upload"></i>
+            点击上传
+          </label>
+          <div className="upload-divider">或</div>
+          <div className="drag-tip">
+            将文件拖拽到此处
+          </div>
+        </div>
+      </div>
+      
+      {/* 修改进度条显示逻辑 */}
+      {(progress.status !== 'waiting' && showProgress) && (
         <div className="upload-progress">
           {/* 进度条 */}
           <div className="progress-bar">
